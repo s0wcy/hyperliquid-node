@@ -160,8 +160,25 @@ func (r *LocalNodeReader) getAssetSymbol(assetID int) string {
 		return "ASSET_" + strconv.Itoa(assetID)
 	}
 	
+	// First try direct asset ID lookup (for perpetuals)
 	if asset, exists := r.assetFetcher.GetAssetByID(assetID); exists {
 		return asset.Name
+	}
+	
+	// Then try spot asset lookup (spot assets use 10000 + index)
+	if asset, exists := r.assetFetcher.GetAssetByID(10000 + assetID); exists {
+		return asset.Name
+	}
+	
+	// For spot assets that don't have names in the fetcher, use @X format
+	// This matches Hyperliquid's convention for spot assets
+	if assetID > 0 && assetID < 1000 { // Reasonable range for spot asset indices
+		spotName := fmt.Sprintf("@%d", assetID)
+		logrus.WithFields(logrus.Fields{
+			"asset_id": assetID,
+			"spot_name": spotName,
+		}).Debug("Using spot asset name format")
+		return spotName
 	}
 	
 	// Return asset ID as string if not found
@@ -468,6 +485,14 @@ func (r *LocalNodeReader) processOrders(orders []Order, blockTime string, userAd
 	ordersProcessed := 0
 	for _, order := range orders {
 		symbol := r.getAssetSymbol(order.Asset)
+		
+		// Log asset mapping for debugging
+		logrus.WithFields(logrus.Fields{
+			"asset_id": order.Asset,
+			"symbol": symbol,
+			"price": order.Price,
+			"size": order.Size,
+		}).Debug("Processing order - asset mapping")
 		
 		// Skip if we couldn't map the asset
 		if strings.HasPrefix(symbol, "ASSET_") {

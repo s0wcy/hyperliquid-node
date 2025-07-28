@@ -196,31 +196,32 @@ func (p *Proxy) generateAllMidsFromLocalNode() {
 		return
 	}
 	
-	// Get ALL available prices from local node (not just a fixed list)
+	// Get ALL available prices from local node using AssetFetcher data
 	allPrices := make(map[string]string)
 	
-	// Try to get prices for all known assets
-	knownAssets := []string{
-		"BTC", "ETH", "SOL", "MATIC", "ARB", "OP", "AVAX", "ATOM", "NEAR", "APT", 
-		"LTC", "BCH", "XRP", "SUI", "SEI", "DOGE", "SHIB", "PEPE", "WIF", "BONK",
-		"ADA", "DOT", "LINK", "UNI", "AAVE", "CRV", "MKR", "COMP", "SNX", "YFI",
-		"FTM", "ALGO", "VET", "ONE", "HBAR", "EGLD", "THETA", "TRX", "EOS", "XTZ",
-		"AXS", "SAND", "MANA", "ENJ", "CHZ", "BAT", "GMX", "GNS", "DYDX", "PERP",
-		"IMX", "BLUR", "MAGIC", "APE", "FLOW", "ENS", "AUDIO", "PENDLE", "RDNT",
-	}
+	// Get all asset names from AssetFetcher
+	allAssetNames := p.GetAllAssetNames()
+	logrus.WithField("total_assets_from_fetcher", len(allAssetNames)).Debug("Retrieved assets from AssetFetcher")
 	
-	for _, coin := range knownAssets {
-		if price, exists := p.localNodeReader.GetLatestPrice(coin); exists {
-			allPrices[coin] = price
+	// Try to get prices for all assets from AssetFetcher
+	for _, assetName := range allAssetNames {
+		if price, exists := p.localNodeReader.GetLatestPrice(assetName); exists {
+			allPrices[assetName] = price
 		}
 	}
 	
-	// Also try to get any prices that might be stored with ASSET_ prefix
-	if len(allPrices) < 10 { // If we don't have many known assets, try ASSET_ ones
-		for i := 0; i < 300; i++ {
+	// Also try to get any prices that might be stored with ASSET_ prefix as fallback
+	if len(allPrices) < 10 {
+		logrus.Debug("Few prices found from AssetFetcher assets, trying ASSET_ fallback")
+		for i := 0; i < 500; i++ {
 			assetName := fmt.Sprintf("ASSET_%d", i)
 			if price, exists := p.localNodeReader.GetLatestPrice(assetName); exists {
 				allPrices[assetName] = price
+				logrus.WithFields(logrus.Fields{
+					"asset_id": i,
+					"asset_name": assetName,
+					"price": price,
+				}).Debug("Found price for fallback asset")
 			}
 		}
 	}

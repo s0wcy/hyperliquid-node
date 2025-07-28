@@ -162,6 +162,7 @@ func (af *AssetFetcher) fetchPerpetuals() error {
 	}
 	
 	// Process perpetuals
+	perpAssetNames := make([]string, 0)
 	for i, asset := range metaResp.Universe {
 		assetInfo := &AssetInfo{
 			Index:       i,
@@ -173,9 +174,13 @@ func (af *AssetFetcher) fetchPerpetuals() error {
 		
 		af.perpAssets[i] = assetInfo
 		af.assetsByName[asset.Name] = assetInfo
+		perpAssetNames = append(perpAssetNames, asset.Name)
 	}
 	
-	logrus.WithField("count", len(metaResp.Universe)).Debug("Fetched perpetual assets")
+	logrus.WithFields(logrus.Fields{
+		"count": len(metaResp.Universe),
+		"assets": perpAssetNames,
+	}).Debug("Fetched perpetual assets")
 	return nil
 }
 
@@ -212,6 +217,7 @@ func (af *AssetFetcher) fetchSpotAssets() error {
 	}
 	
 	// Process spot pairs
+	spotAssetNames := make([]string, 0)
 	for _, pair := range spotResp.Universe {
 		assetName := pair.Name
 		
@@ -234,9 +240,20 @@ func (af *AssetFetcher) fetchSpotAssets() error {
 		
 		af.spotAssets[10000+pair.Index] = assetInfo
 		af.assetsByName[assetName] = assetInfo
+		spotAssetNames = append(spotAssetNames, fmt.Sprintf("%s(%d)", assetName, pair.Index))
 	}
 	
-	logrus.WithField("count", len(spotResp.Universe)).Debug("Fetched spot assets")
+	// Limit assets shown in logs to avoid spam
+	assetsToShow := spotAssetNames
+	if len(spotAssetNames) > 20 {
+		assetsToShow = spotAssetNames[:20]
+	}
+	
+	logrus.WithFields(logrus.Fields{
+		"count": len(spotResp.Universe),
+		"assets": assetsToShow,
+		"total": len(spotAssetNames),
+	}).Debug("Fetched spot assets")
 	return nil
 }
 
