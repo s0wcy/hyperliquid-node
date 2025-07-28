@@ -3,7 +3,7 @@
 # Server configuration
 server:
   host: "0.0.0.0"     # Interface to bind to (0.0.0.0 for all interfaces)
-  port: 8081          # Port to listen on
+  port: 8080          # Port to listen on
 
 # Hyperliquid API configuration
 hyperliquid:
