@@ -278,7 +278,7 @@ func (r *LocalNodeReader) readBlockFile(filePath string, fromPos int64) {
 	logrus.WithFields(logrus.Fields{
 		"file":     filePath,
 		"from_pos": fromPos,
-	}).Debug("Reading block file")
+	}).Info("NEW VERSION - Reading block file with chunk method")
 	
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -286,6 +286,18 @@ func (r *LocalNodeReader) readBlockFile(filePath string, fromPos int64) {
 		return
 	}
 	defer file.Close()
+	
+	// Get file size
+	stat, err := file.Stat()
+	if err != nil {
+		logrus.WithError(err).Error("Failed to get file stats")
+		return
+	}
+	
+	// If file is smaller than our last position, reset
+	if stat.Size() <= fromPos {
+		return
+	}
 	
 	// Seek to the last read position
 	if fromPos > 0 {
@@ -296,35 +308,66 @@ func (r *LocalNodeReader) readBlockFile(filePath string, fromPos int64) {
 		}
 	}
 	
-	scanner := bufio.NewScanner(file)
+	// Read the entire remaining file content
+	remainingSize := stat.Size() - fromPos
+	if remainingSize > 100*1024*1024 { // Limit to 100MB per read to avoid memory issues
+		remainingSize = 100 * 1024 * 1024
+	}
+	
+	buffer := make([]byte, remainingSize)
+	bytesRead, err := file.Read(buffer)
+	if err != nil && bytesRead == 0 {
+		logrus.WithError(err).Error("Failed to read file")
+		return
+	}
+	
+	content := string(buffer[:bytesRead])
+	lines := strings.Split(content, "\n")
+	
 	newPos := fromPos
 	
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	// Process each line
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 		
-		newPos += int64(len(scanner.Bytes()) + 1) // +1 for newline
+		// Update position (except for the last line which might be incomplete)
+		if i < len(lines)-1 {
+			newPos += int64(len(line) + 1) // +1 for newline
+		}
+		
+		// Skip incomplete last line if we didn't read the entire file
+		if i == len(lines)-1 && bytesRead == int(remainingSize) && fromPos+int64(bytesRead) < stat.Size() {
+			continue
+		}
 		
 		// Parse the NDJSON line as a block
 		var block HyperliquidNodeBlock
 		if err := json.Unmarshal([]byte(line), &block); err != nil {
-			logrus.WithError(err).Debug("Failed to parse block line")
+			logrus.WithError(err).WithField("line_length", len(line)).Debug("Failed to parse block line")
 			continue
 		}
 		
 		// Process the block
 		r.processBlock(&block)
-	}
-	
-	if err := scanner.Err(); err != nil {
-		logrus.WithError(err).Error("Error reading file")
-		return
+		
+		// Update position for complete lines
+		if i == len(lines)-1 && (bytesRead < int(remainingSize) || fromPos+int64(bytesRead) >= stat.Size()) {
+			newPos += int64(len(line))
+		}
 	}
 	
 	// Update last read position
 	r.lastReadFiles[filePath] = newPos
+	
+	logrus.WithFields(logrus.Fields{
+		"file":        filePath,
+		"bytes_read":  bytesRead,
+		"lines_processed": len(lines),
+		"new_pos":     newPos,
+	}).Debug("Block file read completed")
 }
 
 // processBlock processes a single block
