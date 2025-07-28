@@ -344,7 +344,7 @@ func (p *Proxy) forwardMessageToClients(channel string, data []byte) {
 	
 	forwardedCount := 0
 	
-	for key, subInfo := range p.globalSubscriptions {
+	for _, subInfo := range p.globalSubscriptions {
 		// Match channel with subscription type
 		if string(subInfo.Subscription.Type) == channel {
 			// Update last message

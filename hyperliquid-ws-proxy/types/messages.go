@@ -2,7 +2,6 @@ package types
 
 import (
 	"encoding/json"
-	"time"
 )
 
 // Base message structures
@@ -45,13 +44,13 @@ type PostResponseInner struct {
 type SubscriptionType string
 
 const (
-	AllMids                     SubscriptionType = "allMids"
-	L2Book                      SubscriptionType = "l2Book"
-	Trades                      SubscriptionType = "trades"
-	Candle                      SubscriptionType = "candle"
-	BBO                         SubscriptionType = "bbo"
-	Notification                SubscriptionType = "notification"
-	WebData2                    SubscriptionType = "webData2"
+	AllMidsType                     SubscriptionType = "allMids"
+	L2BookType                      SubscriptionType = "l2Book"
+	TradesType                      SubscriptionType = "trades"
+	CandleType                      SubscriptionType = "candle"
+	BBOType                         SubscriptionType = "bbo"
+	NotificationType                SubscriptionType = "notification"
+	WebData2Type                    SubscriptionType = "webData2"
 	OrderUpdates                SubscriptionType = "orderUpdates"
 	UserEvents                  SubscriptionType = "userEvents"
 	UserFills                   SubscriptionType = "userFills"
@@ -112,6 +111,10 @@ type Candle struct {
 	L float64 `json:"l"` // low price
 	V float64 `json:"v"` // volume
 	N int     `json:"n"` // number of trades
+}
+
+type WebData2 struct {
+	Data map[string]interface{} `json:"data,omitempty"`
 }
 
 type WsUserFills struct {
@@ -230,12 +233,6 @@ type WsActiveAssetData struct {
 type Leverage struct {
 	Type  string `json:"type"`
 	Value int    `json:"value"`
-}
-
-// WebData2 structure (simplified - expand as needed)
-type WebData2 struct {
-	// Add fields as needed based on actual response structure
-	Data map[string]interface{} `json:"data,omitempty"`
 }
 
 // Additional types for ledger updates

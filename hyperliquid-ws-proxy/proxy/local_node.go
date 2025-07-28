@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"encoding/json"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -248,7 +247,7 @@ func (r *LocalNodeReader) readTradesFile(filePath string) {
 func (r *LocalNodeReader) readFillsFile(filePath string) {
 	logrus.WithField("file", filePath).Debug("Reading fills file")
 	
-	data, err := os.ReadFile(filePath)
+	_, err := os.ReadFile(filePath)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to read fills file")
 		return
