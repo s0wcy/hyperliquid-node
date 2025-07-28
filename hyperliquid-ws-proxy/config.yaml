@@ -13,7 +13,7 @@ hyperliquid:
 
 # Logging configuration
 logging:
-  level: "info"       # debug, info, warn, error
+  level: "debug"       # debug, info, warn, error
   format: "text"      # text or json
 
 # Proxy configuration
@@ -24,5 +24,7 @@ proxy:
   reconnect_max_retries: 5     # Max reconnection attempts to Hyperliquid
   reconnect_interval: 5        # Reconnection interval in seconds
   buffer_size: 1024           # Message buffer size
-  enable_local_node: false     # Disable for now - data format needs investigation
+  
+  # Configuration pour utiliser le node local au lieu de l'API WebSocket
+  enable_local_node: true
   local_node_data_path: "/var/lib/docker/volumes/node_hl-data-mainnet/_data"  # Real path to your node data 

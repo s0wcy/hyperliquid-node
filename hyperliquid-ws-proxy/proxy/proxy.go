@@ -28,6 +28,7 @@ type Proxy struct {
 	
 	// Local node integration
 	localNodeReader *LocalNodeReader
+	useLocalNode    bool
 }
 
 // SubscriptionInfo tracks subscription details
@@ -56,23 +57,26 @@ func NewProxy(cfg *config.Config) *Proxy {
 		config:              cfg,
 		hub:                 client.NewHub(),
 		globalSubscriptions: make(map[string]*SubscriptionInfo),
+		useLocalNode:        cfg.Proxy.EnableLocalNode,
 		stats: ProxyStats{
 			StartTime: time.Now(),
 		},
 	}
 	
-	// Initialize Hyperliquid connector
-	p.hlConnector = hyperliquid.NewConnector(cfg.GetHyperliquidURL())
-	p.hlConnector.SetEventHandlers(
-		p.handleHyperliquidMessage,
-		p.handleHyperliquidConnect,
-		p.handleHyperliquidDisconnect,
-		p.handleHyperliquidError,
-	)
-	
 	// Initialize local node reader if enabled
 	if cfg.Proxy.EnableLocalNode {
+		logrus.Info("Local node mode enabled - will read data from local node instead of WebSocket API")
 		p.localNodeReader = NewLocalNodeReader(cfg.Proxy.LocalNodeDataPath)
+	} else {
+		// Initialize Hyperliquid connector for remote API
+		logrus.Info("Remote API mode - will connect to Hyperliquid WebSocket API")
+		p.hlConnector = hyperliquid.NewConnector(cfg.GetHyperliquidURL())
+		p.hlConnector.SetEventHandlers(
+			p.handleHyperliquidMessage,
+			p.handleHyperliquidConnect,
+			p.handleHyperliquidDisconnect,
+			p.handleHyperliquidError,
+		)
 	}
 	
 	return p
@@ -88,18 +92,27 @@ func (p *Proxy) Start() error {
 	// Start client message processor
 	go p.processClientMessages()
 	
-	// Connect to Hyperliquid
-	if err := p.hlConnector.Connect(); err != nil {
-		return fmt.Errorf("failed to connect to Hyperliquid: %v", err)
+	if p.useLocalNode && p.localNodeReader != nil {
+		// Start local node reader
+		go p.localNodeReader.Start()
+		
+		// Start local data processor
+		go p.processLocalNodeData()
+		
+		logrus.Info("Local node reader started successfully")
+	} else if p.hlConnector != nil {
+		// Connect to Hyperliquid WebSocket API
+		if err := p.hlConnector.Connect(); err != nil {
+			return fmt.Errorf("failed to connect to Hyperliquid: %v", err)
+		}
+		
+		logrus.Info("Connected to Hyperliquid WebSocket API")
+	} else {
+		return fmt.Errorf("neither local node reader nor Hyperliquid connector is available")
 	}
 	
 	// Start statistics updater
 	go p.updateStats()
-	
-	// Start local node reader if enabled
-	if p.localNodeReader != nil {
-		go p.localNodeReader.Start()
-	}
 	
 	logrus.Info("Proxy started successfully")
 	return nil
@@ -109,8 +122,10 @@ func (p *Proxy) Start() error {
 func (p *Proxy) Stop() {
 	logrus.Info("Stopping proxy...")
 	
-	// Disconnect from Hyperliquid
-	p.hlConnector.Disconnect()
+	if p.hlConnector != nil {
+		// Disconnect from Hyperliquid
+		p.hlConnector.Disconnect()
+	}
 	
 	// Stop local node reader
 	if p.localNodeReader != nil {
@@ -118,6 +133,145 @@ func (p *Proxy) Stop() {
 	}
 	
 	logrus.Info("Proxy stopped")
+}
+
+// processLocalNodeData processes data from the local node reader
+func (p *Proxy) processLocalNodeData() {
+	ticker := time.NewTicker(1 * time.Second) // Generate updates every second
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ticker.C:
+			if p.localNodeReader == nil || !p.localNodeReader.IsRunning() {
+				return
+			}
+			
+			// Generate WebSocket messages from local node data
+			p.generateLocalNodeMessages()
+		}
+	}
+}
+
+// generateLocalNodeMessages generates WebSocket messages from local node data
+func (p *Proxy) generateLocalNodeMessages() {
+	// Generate allMids messages
+	p.generateAllMidsFromLocalNode()
+	
+	// Generate trades messages for each coin
+	p.generateTradesFromLocalNode()
+}
+
+// generateAllMidsFromLocalNode generates allMids messages from local node data
+func (p *Proxy) generateAllMidsFromLocalNode() {
+	// Check if anyone is subscribed to allMids
+	hasAllMidsSubscribers := false
+	p.subMu.RLock()
+	for _, subInfo := range p.globalSubscriptions {
+		if subInfo.Subscription.Type == "allMids" && len(subInfo.Clients) > 0 {
+			hasAllMidsSubscribers = true
+			break
+		}
+	}
+	p.subMu.RUnlock()
+	
+	if !hasAllMidsSubscribers {
+		return
+	}
+	
+	// Get all latest prices from local node
+	allPrices := make(map[string]string)
+	coins := []string{"BTC", "ETH", "SOL", "MATIC", "ARB", "OP", "AVAX", "ATOM", "NEAR", "APT", "LTC", "BCH", "XRP", "SUI", "SEI"}
+	
+	for _, coin := range coins {
+		if price, exists := p.localNodeReader.GetLatestPrice(coin); exists {
+			allPrices[coin] = price
+		}
+	}
+	
+	if len(allPrices) == 0 {
+		return
+	}
+	
+	// Create allMids message
+	allMids := types.AllMids{
+		Mids: allPrices,
+	}
+	
+	data, err := json.Marshal(allMids)
+	if err != nil {
+		logrus.WithError(err).Error("Failed to marshal allMids from local node")
+		return
+	}
+	
+	message := types.WSMessage{
+		Channel: "allMids",
+		Data:    data,
+	}
+	
+	messageBytes, err := json.Marshal(message)
+	if err != nil {
+		logrus.WithError(err).Error("Failed to marshal allMids message")
+		return
+	}
+	
+	// Forward to clients subscribed to allMids
+	p.forwardMessageToClients("allMids", messageBytes)
+	
+	logrus.WithField("prices_count", len(allPrices)).Debug("Generated allMids from local node")
+}
+
+// generateTradesFromLocalNode generates trades messages from local node data
+func (p *Proxy) generateTradesFromLocalNode() {
+	// Check which coins have trade subscribers
+	coinsWithSubscribers := make(map[string]bool)
+	p.subMu.RLock()
+	for _, subInfo := range p.globalSubscriptions {
+		if subInfo.Subscription.Type == "trades" && subInfo.Subscription.Coin != "" && len(subInfo.Clients) > 0 {
+			coinsWithSubscribers[subInfo.Subscription.Coin] = true
+		}
+	}
+	p.subMu.RUnlock()
+	
+	// Generate trades for subscribed coins
+	for coin := range coinsWithSubscribers {
+		trades := p.localNodeReader.GetLatestTrades(coin, 10) // Get last 10 trades
+		if len(trades) == 0 {
+			continue
+		}
+		
+		// Send the most recent trade as a trades message
+		latestTrade := trades[len(trades)-1]
+		
+		tradesMessage := map[string]interface{}{
+			"channel": "trades",
+			"data": map[string]interface{}{
+				"coin":  latestTrade.Coin,
+				"side":  latestTrade.Side,
+				"px":    latestTrade.Px,
+				"sz":    latestTrade.Sz,
+				"time":  latestTrade.Time,
+				"hash":  latestTrade.Hash,
+				"tid":   latestTrade.TID,
+				"users": latestTrade.Users,
+			},
+		}
+		
+		messageBytes, err := json.Marshal(tradesMessage)
+		if err != nil {
+			logrus.WithError(err).Error("Failed to marshal trades message")
+			continue
+		}
+		
+		// Forward to clients subscribed to this coin's trades
+		p.forwardMessageToClients("trades", messageBytes)
+		
+		logrus.WithFields(logrus.Fields{
+			"coin":  coin,
+			"side":  latestTrade.Side,
+			"price": latestTrade.Px,
+		}).Debug("Generated trade from local node")
+	}
 }
 
 // GetHub returns the client hub
@@ -186,6 +340,7 @@ func (p *Proxy) handleSubscribe(c *client.Client, sub *types.SubscriptionRequest
 		"type":      sub.Type,
 		"coin":      sub.Coin,
 		"user":      sub.User,
+		"local_node": p.useLocalNode,
 	}).Debug("Handling subscription")
 	
 	// Create subscription key
@@ -202,19 +357,23 @@ func (p *Proxy) handleSubscribe(c *client.Client, sub *types.SubscriptionRequest
 		}
 		p.globalSubscriptions[key] = subInfo
 		
-		// Subscribe to Hyperliquid (only if this is the first client for this subscription)
-		go func() {
-			if err := p.hlConnector.Subscribe(sub); err != nil {
-				logrus.WithError(err).Error("Failed to subscribe to Hyperliquid")
-				p.sendErrorToClient(c, "Failed to subscribe: "+err.Error())
-				
-				// Remove the subscription since it failed
-				p.subMu.Lock()
-				delete(p.globalSubscriptions, key)
-				p.subMu.Unlock()
-				return
-			}
-		}()
+		// Subscribe to Hyperliquid only if not using local node
+		if !p.useLocalNode && p.hlConnector != nil {
+			go func() {
+				if err := p.hlConnector.Subscribe(sub); err != nil {
+					logrus.WithError(err).Error("Failed to subscribe to Hyperliquid")
+					p.sendErrorToClient(c, "Failed to subscribe: "+err.Error())
+					
+					// Remove the subscription since it failed
+					p.subMu.Lock()
+					delete(p.globalSubscriptions, key)
+					p.subMu.Unlock()
+					return
+				}
+			}()
+		} else {
+			logrus.WithField("subscription_type", sub.Type).Debug("Using local node data for subscription")
+		}
 	}
 	
 	subInfo.Clients[c] = true
@@ -230,9 +389,72 @@ func (p *Proxy) handleSubscribe(c *client.Client, sub *types.SubscriptionRequest
 	}
 	c.SendMessage(response)
 	
-	// Send last message if available
-	if subInfo.LastMessage != nil {
+	// Send initial data if using local node
+	if p.useLocalNode && p.localNodeReader != nil {
+		p.sendInitialLocalNodeData(c, sub)
+	} else if subInfo.LastMessage != nil {
+		// Send last message if available from remote API
 		c.Send <- subInfo.LastMessage
+	}
+}
+
+// sendInitialLocalNodeData sends initial data from local node to a newly subscribed client
+func (p *Proxy) sendInitialLocalNodeData(c *client.Client, sub *types.SubscriptionRequest) {
+	switch sub.Type {
+	case "allMids":
+		// Send current prices
+		allPrices := make(map[string]string)
+		coins := []string{"BTC", "ETH", "SOL", "MATIC", "ARB", "OP", "AVAX", "ATOM", "NEAR", "APT", "LTC", "BCH", "XRP", "SUI", "SEI"}
+		
+		for _, coin := range coins {
+			if price, exists := p.localNodeReader.GetLatestPrice(coin); exists {
+				allPrices[coin] = price
+			}
+		}
+		
+		if len(allPrices) > 0 {
+			allMids := types.AllMids{Mids: allPrices}
+			data, err := json.Marshal(allMids)
+			if err == nil {
+				message := types.WSMessage{
+					Channel: "allMids",
+					Data:    data,
+				}
+				c.SendMessage(message)
+				logrus.WithField("client_id", c.ID).Debug("Sent initial allMids from local node")
+			}
+		}
+		
+	case "trades":
+		if sub.Coin != "" {
+			// Send recent trades for the specific coin
+			trades := p.localNodeReader.GetLatestTrades(sub.Coin, 5) // Send last 5 trades
+			for _, trade := range trades {
+				tradesMessage := map[string]interface{}{
+					"channel": "trades",
+					"data": map[string]interface{}{
+						"coin":  trade.Coin,
+						"side":  trade.Side,
+						"px":    trade.Px,
+						"sz":    trade.Sz,
+						"time":  trade.Time,
+						"hash":  trade.Hash,
+						"tid":   trade.TID,
+						"users": trade.Users,
+					},
+				}
+				
+				messageBytes, err := json.Marshal(tradesMessage)
+				if err == nil {
+					c.Send <- messageBytes
+				}
+			}
+			logrus.WithFields(logrus.Fields{
+				"client_id": c.ID,
+				"coin":      sub.Coin,
+				"trades_count": len(trades),
+			}).Debug("Sent initial trades from local node")
+		}
 	}
 }
 
@@ -257,14 +479,16 @@ func (p *Proxy) handleUnsubscribe(c *client.Client, sub *types.SubscriptionReque
 	if exists {
 		delete(subInfo.Clients, c)
 		
-		// If no more clients, unsubscribe from Hyperliquid
+		// If no more clients, unsubscribe from Hyperliquid (only if not using local node)
 		if len(subInfo.Clients) == 0 {
 			delete(p.globalSubscriptions, key)
-			go func() {
-				if err := p.hlConnector.Unsubscribe(sub); err != nil {
-					logrus.WithError(err).Error("Failed to unsubscribe from Hyperliquid")
-				}
-			}()
+			if !p.useLocalNode && p.hlConnector != nil {
+				go func() {
+					if err := p.hlConnector.Unsubscribe(sub); err != nil {
+						logrus.WithError(err).Error("Failed to unsubscribe from Hyperliquid")
+					}
+				}()
+			}
 		}
 	}
 	p.subMu.Unlock()
@@ -291,7 +515,19 @@ func (p *Proxy) handlePostRequest(c *client.Client, msg *types.WSMessage) {
 		"client_id":    c.ID,
 		"request_id":   *msg.ID,
 		"request_type": msg.Request.Type,
+		"local_node":   p.useLocalNode,
 	}).Debug("Handling POST request")
+	
+	if p.useLocalNode {
+		// For local node mode, we can't handle POST requests as they require the Hyperliquid API
+		p.sendPostErrorToClient(c, *msg.ID, "POST requests not supported in local node mode")
+		return
+	}
+	
+	if p.hlConnector == nil {
+		p.sendPostErrorToClient(c, *msg.ID, "Hyperliquid connector not available")
+		return
+	}
 	
 	// Forward request to Hyperliquid
 	response, err := p.hlConnector.PostRequest(msg.Request.Type, msg.Request.Payload)
@@ -313,7 +549,7 @@ func (p *Proxy) handlePostRequest(c *client.Client, msg *types.WSMessage) {
 	p.stats.mu.Unlock()
 }
 
-// handleHyperliquidMessage handles messages from Hyperliquid
+// handleHyperliquidMessage handles messages from Hyperliquid (only used when not in local node mode)
 func (p *Proxy) handleHyperliquidMessage(data []byte) {
 	p.updateStatsActivity()
 	
@@ -333,7 +569,7 @@ func (p *Proxy) handleHyperliquidMessage(data []byte) {
 		return
 	}
 	
-	// Find matching subscriptions and forward to clients
+	// Forward message to clients
 	p.forwardMessageToClients(msg.Channel, data)
 }
 
@@ -422,6 +658,7 @@ func (p *Proxy) updateStats() {
 			"messages_proc":    stats.MessagesProcessed,
 			"messages_fwd":     stats.MessagesForwarded,
 			"post_requests":    stats.PostRequestsHandled,
+			"local_node":       p.useLocalNode,
 		}).Debug("Proxy statistics")
 	}
 }

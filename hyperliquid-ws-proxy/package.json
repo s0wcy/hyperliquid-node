@@ -1,0 +1,22 @@
+{
+  "name": "hyperliquid-ws-proxy-test",
+  "version": "1.0.0",
+  "description": "Test script for Hyperliquid WebSocket Proxy",
+  "main": "test-websocket-proxy.js",
+  "scripts": {
+    "test": "node test-websocket-proxy.js",
+    "test:quick": "node test-websocket-proxy.js --quick",
+    "test:user": "node test-websocket-proxy.js --user"
+  },
+  "dependencies": {
+    "ws": "^8.17.1"
+  },
+  "keywords": [
+    "hyperliquid",
+    "websocket",
+    "proxy",
+    "test"
+  ],
+  "author": "Hyperliquid Proxy Tester",
+  "license": "MIT"
+}

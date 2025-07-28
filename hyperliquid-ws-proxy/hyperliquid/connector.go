@@ -98,9 +98,8 @@ func (c *Connector) Connect() error {
 	// Start goroutines
 	go c.readPump()
 	go c.writePump()
-	if c.enableHeartbeat {
-		go c.heartbeatLoop()
-	}
+	// Note: JSON heartbeats are now sent directly in writePump() every 50 seconds
+	// This is compatible with Hyperliquid's requirement for activity every 60 seconds
 	
 	// Resubscribe to existing subscriptions
 	go c.resubscribeAll()
@@ -243,11 +242,12 @@ func (c *Connector) readPump() {
 		// Set read deadline
 		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		
-		// Set pong handler
-		conn.SetPongHandler(func(string) error {
-			c.lastPong = time.Now()
-			return nil
-		})
+			// Set pong handler for WebSocket pings (backup)
+	conn.SetPongHandler(func(string) error {
+		c.lastPong = time.Now()
+		logrus.Debug("Received WebSocket pong from Hyperliquid")
+		return nil
+	})
 		
 		_, message, err := conn.ReadMessage()
 		if err != nil {
@@ -265,7 +265,7 @@ func (c *Connector) readPump() {
 
 // writePump handles outgoing messages to Hyperliquid
 func (c *Connector) writePump() {
-	ticker := time.NewTicker(54 * time.Second) // Ping interval
+	ticker := time.NewTicker(50 * time.Second) // Send JSON heartbeat every 50 seconds (safely under 60s limit)
 	defer ticker.Stop()
 	
 	for {
@@ -297,44 +297,40 @@ func (c *Connector) writePump() {
 				return
 			}
 			
+			// Send JSON heartbeat message instead of WebSocket ping
+			heartbeat := []byte(`{"method":"ping"}`)
 			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				logrus.WithError(err).Error("Ping error")
+			if err := conn.WriteMessage(websocket.TextMessage, heartbeat); err != nil {
+				logrus.WithError(err).Error("Heartbeat error")
 				c.handleDisconnect(err)
 				return
+			} else {
+				logrus.Debug("Sent JSON heartbeat to Hyperliquid")
 			}
 		}
 	}
 }
 
-// heartbeatLoop monitors connection health
+// heartbeatLoop is no longer needed - JSON heartbeats are sent in writePump()
+// This function is kept for backwards compatibility but does nothing
 func (c *Connector) heartbeatLoop() {
-	ticker := time.NewTicker(c.heartbeatInterval)
-	defer ticker.Stop()
-	
-	for {
-		select {
-		case <-ticker.C:
-			if !c.IsConnected() {
-				return
-			}
-			
-			// Check if we've received a pong recently
-			if time.Since(c.lastPong) > 2*c.heartbeatInterval {
-				logrus.Warn("Heartbeat timeout, reconnecting...")
-				c.handleDisconnect(fmt.Errorf("heartbeat timeout"))
-				return
-			}
-		}
-	}
+	// JSON heartbeats are now handled directly in writePump() every 50 seconds
+	// to comply with Hyperliquid's 60-second activity requirement
 }
 
 // processMessage processes incoming messages from Hyperliquid
 func (c *Connector) processMessage(data []byte) {
+	// Check for heartbeat response (pong) - ignore it
+	if string(data) == `{"method":"pong"}` || string(data) == `{"status":"pong"}` {
+		logrus.Debug("Received JSON pong from Hyperliquid")
+		c.lastPong = time.Now()
+		return
+	}
+	
 	// Try to parse as a general message first
 	var msg types.WSMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
-		logrus.WithError(err).Error("Failed to parse message")
+		logrus.WithError(err).WithField("raw_message", string(data)).Error("Failed to parse message")
 		return
 	}
 	
