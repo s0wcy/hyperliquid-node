@@ -1,0 +1,22 @@
+name: "hyperliquid-mainnet"
+
+services:
+  node:
+    restart: unless-stopped
+    build: 
+      context: .
+      dockerfile: Dockerfile.mainnet
+    ports:
+      - "4000-4010:4000-4010"
+    volumes:
+      - hl-data-mainnet:/home/hluser/hl/data
+
+  pruner:
+    restart: unless-stopped
+    build: ./pruner
+    volumes:
+      - hl-data-mainnet:/home/hluser/hl/data
+
+volumes:
+  hl-data-mainnet:
+    driver: local 
