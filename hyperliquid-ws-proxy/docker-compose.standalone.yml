@@ -9,17 +9,43 @@ services:
       - "8080:8080"
     volumes:
       - ./config.yaml:/config.yaml:ro
-    command: ["-config", "/config.yaml"]
+      # Volume pour accéder aux données du node Hyperliquid local
+      - /var/lib/docker/volumes/node_hl-data-mainnet/_data:/var/lib/docker/volumes/node_hl-data-mainnet/_data:ro
+    command: ["-config", "/config.yaml", "-log-level", "info"]
     environment:
       - TZ=Europe/Paris
+    # Utiliser l'utilisateur root pour accéder aux volumes Docker du node
+    user: "0:0"
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 30s  # Plus de temps pour le démarrage avec node local
     logging:
       driver: "json-file"
       options:
-        max-size: "10m"
-        max-file: "3" 
+        max-size: "50m"  # Plus de logs pour le debug
+        max-file: "5"
+    # Dépendance optionnelle sur le node (si il tourne en container)
+    depends_on:
+      - node
+    profiles:
+      - with-node
+  
+  # Service node Hyperliquid (optionnel, si pas déjà lancé séparément)
+  node:
+    image: node_node  # Remplacer par l'image du node si différente
+    container_name: hyperliquid-node
+    restart: unless-stopped
+    volumes:
+      - node_hl-data-mainnet:/home/hluser/hl/data
+    ports:
+      - "4000-4010:4000-4010"
+    profiles:
+      - with-node
+
+volumes:
+  # Volume partagé avec le node Hyperliquid
+  node_hl-data-mainnet:
+    external: true 

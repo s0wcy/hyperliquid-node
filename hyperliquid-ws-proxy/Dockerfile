@@ -22,8 +22,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -a -installsuffix cgo \
     -o hyperliquid-ws-proxy .
 
-# Final stage
-FROM scratch
+# Final stage - use busybox instead of scratch for better debugging
+FROM busybox:musl
 
 # Copy ca-certificates from builder
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
@@ -34,15 +34,21 @@ COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 # Copy the binary
 COPY --from=builder /app/hyperliquid-ws-proxy /hyperliquid-ws-proxy
 
-# Create a non-root user (even though we're using scratch)
-USER 65534:65534
+# Install wget for health checks
+RUN wget --version > /dev/null 2>&1 || echo "wget not available, health check may fail"
+
+# Create necessary directories
+RUN mkdir -p /var/lib/docker/volumes
+
+# Run as root to access Docker volumes (necessary for local node access)
+USER 0:0
 
 # Expose port
 EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["/hyperliquid-ws-proxy", "-version"]
+# Health check using the /health endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD wget --quiet --tries=1 --spider http://localhost:8080/health || exit 1
 
 # Run the application
 ENTRYPOINT ["/hyperliquid-ws-proxy"] 

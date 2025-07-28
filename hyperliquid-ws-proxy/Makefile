@@ -19,7 +19,7 @@ GOMOD = $(GOCMD) mod
 PLATFORMS = linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 BINARY_DIR = bin
 
-.PHONY: all build clean test deps tidy run docker docker-build docker-run help
+.PHONY: all build clean test deps tidy run docker docker-build docker-run compose-up compose-down compose-build compose-logs compose-restart deploy undeploy test-proxy-local test-proxy-remote test-quick test-full help
 
 # Default target
 all: clean deps test build
@@ -97,6 +97,7 @@ docker-build:
 	docker build -t $(APP_NAME):$(VERSION) .
 	docker tag $(APP_NAME):$(VERSION) $(APP_NAME):latest
 
+# Legacy Docker run (deprecated - use docker-compose instead)
 docker-run:
 	@echo "Running Docker container..."
 	docker run -d \
@@ -115,10 +116,64 @@ docker-logs:
 	@echo "Showing Docker logs..."
 	docker logs -f $(APP_NAME)
 
+# Docker Compose targets (recommended)
+compose-up:
+	@echo "Starting services with Docker Compose..."
+	docker-compose up -d
+
+compose-down:
+	@echo "Stopping services with Docker Compose..."
+	docker-compose down
+
+compose-build:
+	@echo "Building services with Docker Compose..."
+	docker-compose build
+
+compose-logs:
+	@echo "Showing logs from Docker Compose..."
+	docker-compose logs -f
+
+compose-restart:
+	@echo "Restarting services with Docker Compose..."
+	docker-compose restart
+
+# Combined commands
+deploy: compose-build compose-up
+	@echo "Deployment complete! WebSocket available at: ws://localhost:8080/ws"
+
+undeploy: compose-down
+	@echo "Services stopped"
+
 # Development targets
 dev: clean deps
 	@echo "Starting development mode..."
 	$(GOCMD) run . -log-level debug
+
+# Test targets
+test-proxy-local:
+	@echo "Testing local proxy with node data..."
+	@command -v node >/dev/null 2>&1 || { echo "❌ Node.js is required for tests"; exit 1; }
+	@npm list ws >/dev/null 2>&1 || npm install ws
+	node test-local-proxy.js
+
+test-proxy-remote:
+	@echo "Testing proxy vs official Hyperliquid API..."
+	@command -v node >/dev/null 2>&1 || { echo "❌ Node.js is required for tests"; exit 1; }
+	@npm list ws >/dev/null 2>&1 || npm install ws
+	node test-websocket-proxy.js
+
+test-quick:
+	@echo "Quick health check..."
+	@curl -s http://localhost:8080/health || echo "❌ Service not responding"
+	@curl -s http://localhost:8080/stats || echo "❌ Stats not available"
+
+# Comprehensive test (build, deploy, test, cleanup)
+test-full: compose-build compose-up
+	@echo "Waiting for service to start..."
+	@sleep 10
+	@make test-quick
+	@make test-proxy-local
+	@make compose-down
 
 # Format code
 fmt:
@@ -198,7 +253,23 @@ help:
 	@echo "  install       - Install binary to GOPATH/bin"
 	@echo "  release       - Create release archives"
 	@echo "  docker-build  - Build Docker image"
-	@echo "  docker-run    - Run Docker container"
+	@echo "  docker-run    - Run Docker container (legacy)"
 	@echo "  docker-stop   - Stop Docker container"
 	@echo "  docker-logs   - Show Docker logs"
+	@echo ""
+	@echo "Docker Compose (recommended):"
+	@echo "  compose-build - Build services with Docker Compose"
+	@echo "  compose-up    - Start services with Docker Compose"
+	@echo "  compose-down  - Stop services with Docker Compose"
+	@echo "  compose-logs  - Show logs from Docker Compose"
+	@echo "  compose-restart - Restart services"
+	@echo "  deploy        - Build and start services (compose-build + compose-up)"
+	@echo "  undeploy      - Stop services (compose-down)"
+	@echo ""
+	@echo "Test targets:"
+	@echo "  test-quick        - Quick health check"
+	@echo "  test-proxy-local  - Test local proxy with node data"
+	@echo "  test-proxy-remote - Test proxy vs official API"
+	@echo "  test-full         - Full test suite (build + deploy + test + cleanup)"
+	@echo ""
 	@echo "  help          - Show this help message" 
