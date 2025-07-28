@@ -575,12 +575,13 @@ func (p *Proxy) handleHyperliquidMessage(data []byte) {
 
 // forwardMessageToClients forwards a message to relevant clients
 func (p *Proxy) forwardMessageToClients(channel string, data []byte) {
-	p.subMu.RLock()
-	defer p.subMu.RUnlock()
+	p.subMu.Lock()
+	defer p.subMu.Unlock()
 	
 	forwardedCount := 0
+	clientsToRemove := make(map[*client.Client][]string) // client -> list of subscription keys to remove
 	
-	for _, subInfo := range p.globalSubscriptions {
+	for key, subInfo := range p.globalSubscriptions {
 		// Match channel with subscription type
 		if string(subInfo.Subscription.Type) == channel {
 			// Update last message
@@ -589,11 +590,32 @@ func (p *Proxy) forwardMessageToClients(channel string, data []byte) {
 			
 			// Forward to all clients subscribed to this
 			for c := range subInfo.Clients {
+				// Try to send message to client
 				select {
 				case c.Send <- data:
 					forwardedCount++
 				default:
-					// Client channel is full, skip
+					// Client channel is full or closed - mark for removal
+					logrus.WithField("client_id", c.ID).Debug("Client channel closed, removing from subscription")
+					if clientsToRemove[c] == nil {
+						clientsToRemove[c] = make([]string, 0)
+					}
+					clientsToRemove[c] = append(clientsToRemove[c], key)
+				}
+			}
+		}
+	}
+	
+	// Clean up disconnected clients
+	for client, subscriptionKeys := range clientsToRemove {
+		for _, key := range subscriptionKeys {
+			if subInfo, exists := p.globalSubscriptions[key]; exists {
+				delete(subInfo.Clients, client)
+				
+				// If no more clients for this subscription, remove the subscription entirely
+				if len(subInfo.Clients) == 0 {
+					delete(p.globalSubscriptions, key)
+					logrus.WithField("subscription_key", key).Debug("Removed empty subscription")
 				}
 			}
 		}

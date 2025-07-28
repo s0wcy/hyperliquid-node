@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
