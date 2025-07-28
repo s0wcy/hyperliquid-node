@@ -572,58 +572,17 @@ func (r *LocalNodeReader) processCancellations(cancels []Cancel, blockTime strin
 func (r *LocalNodeReader) processBlocks() {
 	for {
 		select {
-		case block := <-r.blocksChan:
+		case <-r.blocksChan:
 			if !r.IsRunning() {
 				return
 			}
 			
-			// Here we could generate WebSocket messages for subscribed clients
-			r.generateWebSocketMessages(block)
+			// Block processed and prices updated - Proxy handles WebSocket distribution
 		}
 	}
 }
 
-// generateWebSocketMessages generates WebSocket messages for various subscription types
-func (r *LocalNodeReader) generateWebSocketMessages(block *HyperliquidNodeBlock) {
-	// Generate allMids message if we have price data
-	r.dataMu.RLock()
-	pricesCount := len(r.latestPrices)
-	r.dataMu.RUnlock()
-	
-	if pricesCount > 0 {
-		r.generateAllMidsMessage()
-	} else {
-		logrus.Debug("No prices available yet for allMids generation")
-	}
-}
 
-// generateAllMidsMessage generates and sends allMids message
-func (r *LocalNodeReader) generateAllMidsMessage() {
-	r.dataMu.RLock()
-	if len(r.latestPrices) == 0 {
-		r.dataMu.RUnlock()
-		return
-	}
-	
-	allMids := types.AllMids{
-		Mids: make(map[string]string),
-	}
-	for symbol, price := range r.latestPrices {
-		allMids.Mids[symbol] = price
-	}
-	r.dataMu.RUnlock()
-	
-	_, err := json.Marshal(allMids)
-	if err != nil {
-		logrus.WithError(err).Error("Failed to marshal allMids message")
-		return
-	}
-	
-	logrus.WithField("symbols_count", len(allMids.Mids)).Debug("Generated allMids message")
-	
-	// TODO: This should be sent to the proxy for distribution to clients
-	// For now, we just log that it was generated
-}
 
 // parseBlockTime parses block time to Unix timestamp
 func (r *LocalNodeReader) parseBlockTime(timeStr string) int64 {

@@ -275,14 +275,7 @@ func (af *AssetFetcher) GetAssetByID(id int) (*AssetInfo, bool) {
 	return nil, false
 }
 
-// GetAssetByName returns asset info by name
-func (af *AssetFetcher) GetAssetByName(name string) (*AssetInfo, bool) {
-	af.mu.RLock()
-	defer af.mu.RUnlock()
-	
-	asset, exists := af.assetsByName[name]
-	return asset, exists
-}
+
 
 // GetAllAssetNames returns all asset names
 func (af *AssetFetcher) GetAllAssetNames() []string {

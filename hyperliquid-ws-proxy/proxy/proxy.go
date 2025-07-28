@@ -180,6 +180,8 @@ func (p *Proxy) generateLocalNodeMessages() {
 
 // generateAllMidsFromLocalNode generates allMids messages from local node data
 func (p *Proxy) generateAllMidsFromLocalNode() {
+	logrus.Debug("=== generateAllMidsFromLocalNode called ===")
+	
 	// Check if anyone is subscribed to allMids
 	hasAllMidsSubscribers := false
 	p.subMu.RLock()
@@ -190,6 +192,8 @@ func (p *Proxy) generateAllMidsFromLocalNode() {
 		}
 	}
 	p.subMu.RUnlock()
+	
+	logrus.WithField("has_subscribers", hasAllMidsSubscribers).Debug("Checked allMids subscribers")
 	
 	if !hasAllMidsSubscribers {
 		logrus.Debug("No allMids subscribers, skipping generation")
@@ -252,7 +256,10 @@ func (p *Proxy) generateAllMidsFromLocalNode() {
 	// Forward to clients subscribed to allMids
 	p.forwardMessageToClients("allMids", messageBytes)
 	
-	logrus.WithField("prices_count", len(allPrices)).Debug("Generated allMids from local node")
+	logrus.WithFields(logrus.Fields{
+		"prices_count": len(allPrices), 
+		"message_size": len(messageBytes),
+	}).Info("=== SENT allMids from local node ===")
 }
 
 // generateTradesFromLocalNode generates trades messages from local node data
@@ -436,15 +443,13 @@ func (p *Proxy) handleSubscribe(c *client.Client, sub *types.SubscriptionRequest
 func (p *Proxy) sendInitialLocalNodeData(c *client.Client, sub *types.SubscriptionRequest) {
 	switch sub.Type {
 	case "allMids":
-		// Send current prices
-		allPrices := make(map[string]string)
-		coins := []string{"BTC", "ETH", "SOL", "MATIC", "ARB", "OP", "AVAX", "ATOM", "NEAR", "APT", "LTC", "BCH", "XRP", "SUI", "SEI"}
+		// Send ALL current prices (not just a fixed list!)
+		allPrices := p.localNodeReader.GetAllLatestPrices()
 		
-		for _, coin := range coins {
-			if price, exists := p.localNodeReader.GetLatestPrice(coin); exists {
-				allPrices[coin] = price
-			}
-		}
+		logrus.WithFields(logrus.Fields{
+			"client_id": c.ID,
+			"prices_count": len(allPrices),
+		}).Info("=== SENDING INITIAL allMids to new client ===")
 		
 		if len(allPrices) > 0 {
 			allMids := types.AllMids{Mids: allPrices}
@@ -455,7 +460,10 @@ func (p *Proxy) sendInitialLocalNodeData(c *client.Client, sub *types.Subscripti
 					Data:    data,
 				}
 				c.SendMessage(message)
-				logrus.WithField("client_id", c.ID).Debug("Sent initial allMids from local node")
+				logrus.WithFields(logrus.Fields{
+					"client_id": c.ID,
+					"prices_sent": len(allPrices),
+				}).Info("=== SENT INITIAL allMids to client ===")
 			}
 		}
 		
