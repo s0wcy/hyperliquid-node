@@ -196,37 +196,30 @@ func (p *Proxy) generateAllMidsFromLocalNode() {
 		return
 	}
 	
-	// Get ALL available prices from local node using AssetFetcher data
-	allPrices := make(map[string]string)
+	// Get ALL available prices directly from local node storage
+	allPrices := p.localNodeReader.GetAllLatestPrices()
 	
-	// Get all asset names from AssetFetcher
-	allAssetNames := p.GetAllAssetNames()
-	logrus.WithField("total_assets_from_fetcher", len(allAssetNames)).Debug("Retrieved assets from AssetFetcher")
+	logrus.WithFields(logrus.Fields{
+		"total_prices_available": len(allPrices),
+	}).Debug("Retrieved all available prices from local node")
 	
-	// Try to get prices for all assets from AssetFetcher
-	for _, assetName := range allAssetNames {
-		if price, exists := p.localNodeReader.GetLatestPrice(assetName); exists {
-			allPrices[assetName] = price
-		}
-	}
-	
-	// Also try to get any prices that might be stored with ASSET_ prefix as fallback
-	if len(allPrices) < 10 {
-		logrus.Debug("Few prices found from AssetFetcher assets, trying ASSET_ fallback")
-		for i := 0; i < 500; i++ {
-			assetName := fmt.Sprintf("ASSET_%d", i)
-			if price, exists := p.localNodeReader.GetLatestPrice(assetName); exists {
-				allPrices[assetName] = price
-				logrus.WithFields(logrus.Fields{
-					"asset_id": i,
-					"asset_name": assetName,
-					"price": price,
-				}).Debug("Found price for fallback asset")
+	// Log a sample of available assets for debugging
+	if len(allPrices) > 0 {
+		sampleAssets := make([]string, 0, 10)
+		count := 0
+		for asset := range allPrices {
+			if count < 10 {
+				sampleAssets = append(sampleAssets, asset)
+				count++
+			} else {
+				break
 			}
 		}
+		logrus.WithFields(logrus.Fields{
+			"sample_assets": sampleAssets,
+			"total_count": len(allPrices),
+		}).Debug("Sample of available assets")
 	}
-	
-	logrus.WithField("available_prices", len(allPrices)).Debug("Collected prices for allMids")
 	
 	if len(allPrices) == 0 {
 		logrus.Debug("No prices available from local node")

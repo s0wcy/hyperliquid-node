@@ -660,6 +660,19 @@ func (r *LocalNodeReader) GetLatestTrades(coin string, limit int) []*types.WsTra
 	return trades
 }
 
+// GetAllLatestPrices returns all available prices
+func (r *LocalNodeReader) GetAllLatestPrices() map[string]string {
+	r.dataMu.RLock()
+	defer r.dataMu.RUnlock()
+	
+	// Create a copy to avoid race conditions
+	allPrices := make(map[string]string)
+	for symbol, price := range r.latestPrices {
+		allPrices[symbol] = price
+	}
+	return allPrices
+}
+
 // getMostRecentDirectory returns the most recent directory in a path
 func (r *LocalNodeReader) getMostRecentDirectory(basePath string) string {
 	entries, err := os.ReadDir(basePath)
