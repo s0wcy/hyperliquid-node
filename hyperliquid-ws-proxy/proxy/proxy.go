@@ -573,6 +573,28 @@ func (p *Proxy) handleHyperliquidMessage(data []byte) {
 	p.forwardMessageToClients(msg.Channel, data)
 }
 
+// safelyTryToSendMessage safely attempts to send a message to a client channel
+// Returns true if successful, false if the channel is closed or full
+func (p *Proxy) safelyTryToSendMessage(clientChannel chan []byte, data []byte, clientID string) (success bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			logrus.WithFields(logrus.Fields{
+				"client_id": clientID,
+				"error":     r,
+			}).Debug("Recovered from panic while sending message to client")
+			success = false
+		}
+	}()
+	
+	select {
+	case clientChannel <- data:
+		return true
+	default:
+		// Channel is full or closed
+		return false
+	}
+}
+
 // forwardMessageToClients forwards a message to relevant clients
 func (p *Proxy) forwardMessageToClients(channel string, data []byte) {
 	p.subMu.Lock()
@@ -590,13 +612,12 @@ func (p *Proxy) forwardMessageToClients(channel string, data []byte) {
 			
 			// Forward to all clients subscribed to this
 			for c := range subInfo.Clients {
-				// Try to send message to client
-				select {
-				case c.Send <- data:
+				// Try to send message to client safely
+				if p.safelyTryToSendMessage(c.Send, data, c.ID) {
 					forwardedCount++
-				default:
+				} else {
 					// Client channel is full or closed - mark for removal
-					logrus.WithField("client_id", c.ID).Debug("Client channel closed, removing from subscription")
+					logrus.WithField("client_id", c.ID).Debug("Client channel closed or full, removing from subscription")
 					if clientsToRemove[c] == nil {
 						clientsToRemove[c] = make([]string, 0)
 					}
