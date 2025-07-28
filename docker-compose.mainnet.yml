@@ -1,4 +1,4 @@
-name: "hyperliquid-mainnet"
+version: '3.8'
 
 services:
   node:
