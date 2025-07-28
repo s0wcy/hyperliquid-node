@@ -163,6 +163,7 @@ func showHelp() {
 	fmt.Println("  Health:    http://localhost:8080/health")
 	fmt.Println("  Stats:     http://localhost:8080/stats")
 	fmt.Println("  Info:      http://localhost:8080/info")
+	fmt.Println("  Assets:    http://localhost:8080/assets")
 	fmt.Println()
 	fmt.Println("EXAMPLE USAGE:")
 	fmt.Println("  # Start with default configuration")

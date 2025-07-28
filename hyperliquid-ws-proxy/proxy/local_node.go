@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -98,13 +99,12 @@ type LocalNodeReader struct {
 	latestPrices    map[string]string
 	dataMu          sync.RWMutex
 	
-	// Asset mapping (asset ID -> symbol)
-	assetMap        map[int]string
-	assetMapMu      sync.RWMutex
+	// Asset fetcher for dynamic asset metadata
+	assetFetcher    *AssetFetcher
 }
 
 // NewLocalNodeReader creates a new local node reader
-func NewLocalNodeReader(dataPath string) *LocalNodeReader {
+func NewLocalNodeReader(dataPath string, assetFetcher *AssetFetcher) *LocalNodeReader {
 	return &LocalNodeReader{
 		dataPath:      dataPath,
 		blocksChan:    make(chan *HyperliquidNodeBlock, 1000),
@@ -114,7 +114,7 @@ func NewLocalNodeReader(dataPath string) *LocalNodeReader {
 		latestBlocks:  make([]*HyperliquidNodeBlock, 0),
 		latestTrades:  make(map[string][]*types.WsTrade),
 		latestPrices:  make(map[string]string),
-		assetMap:      make(map[int]string),
+		assetFetcher:  assetFetcher,
 	}
 }
 
@@ -126,8 +126,7 @@ func (r *LocalNodeReader) Start() {
 	
 	logrus.WithField("data_path", r.dataPath).Info("Starting local node reader for Hyperliquid replica_cmds")
 	
-	// Initialize asset mapping
-	r.initializeAssetMapping()
+	// AssetFetcher is expected to be already initialized and started by the caller
 	
 	// Start file watchers
 	go r.watchReplicaCmdsDirectory()
@@ -152,42 +151,21 @@ func (r *LocalNodeReader) IsRunning() bool {
 	return r.isRunning
 }
 
-// initializeAssetMapping initializes the mapping from asset IDs to symbols
-func (r *LocalNodeReader) initializeAssetMapping() {
-	// Common Hyperliquid assets - this should be fetched from the API in a real implementation
-	r.assetMapMu.Lock()
-	defer r.assetMapMu.Unlock()
-	
-	// Default mapping for common assets
-	r.assetMap[0] = "BTC"
-	r.assetMap[1] = "ETH"
-	r.assetMap[2] = "SOL"
-	r.assetMap[3] = "MATIC"
-	r.assetMap[4] = "ARB"
-	r.assetMap[5] = "OP"
-	r.assetMap[6] = "AVAX"
-	r.assetMap[7] = "ATOM"
-	r.assetMap[8] = "NEAR"
-	r.assetMap[9] = "APT"
-	r.assetMap[10] = "LTC"
-	r.assetMap[11] = "BCH"
-	r.assetMap[12] = "XRP"
-	r.assetMap[13] = "SUI"
-	r.assetMap[14] = "SEI"
-	
-	logrus.WithField("assets_count", len(r.assetMap)).Debug("Initialized asset mapping")
-}
 
-// getAssetSymbol returns the symbol for an asset ID
+
+// getAssetSymbol returns the symbol for an asset ID using the AssetFetcher
 func (r *LocalNodeReader) getAssetSymbol(assetID int) string {
-	r.assetMapMu.RLock()
-	defer r.assetMapMu.RUnlock()
+	if r.assetFetcher == nil {
+		logrus.WithField("asset_id", assetID).Warn("AssetFetcher not initialized")
+		return "ASSET_" + strconv.Itoa(assetID)
+	}
 	
-	if symbol, exists := r.assetMap[assetID]; exists {
-		return symbol
+	if asset, exists := r.assetFetcher.GetAssetByID(assetID); exists {
+		return asset.Name
 	}
 	
 	// Return asset ID as string if not found
+	logrus.WithField("asset_id", assetID).Debug("Asset not found in fetcher, using fallback name")
 	return "ASSET_" + strconv.Itoa(assetID)
 }
 
@@ -388,9 +366,17 @@ func (r *LocalNodeReader) processBlock(block *HyperliquidNodeBlock) {
 	r.dataMu.Unlock()
 	
 	// Process each signed action bundle
-	for _, bundleInterface := range block.ABCIBlock.SignedActionBundles {
+	bundleProcessed := 0
+	for i, bundleInterface := range block.ABCIBlock.SignedActionBundles {
+		logrus.WithField("bundle_index", i).Debug("Processing signed action bundle")
 		r.processSignedActionBundle(bundleInterface, block.ABCIBlock.Time)
+		bundleProcessed++
 	}
+	
+	logrus.WithFields(logrus.Fields{
+		"round": block.ABCIBlock.Round,
+		"bundles_processed": bundleProcessed,
+	}).Debug("Block processing completed")
 	
 	// Send block to processing channel
 	select {
@@ -404,7 +390,13 @@ func (r *LocalNodeReader) processBlock(block *HyperliquidNodeBlock) {
 func (r *LocalNodeReader) processSignedActionBundle(bundleInterface interface{}, blockTime string) {
 	// SignedActionBundles are arrays of [hash, bundle_data]
 	bundleArray, ok := bundleInterface.([]interface{})
-	if !ok || len(bundleArray) < 2 {
+	if !ok {
+		logrus.WithField("type", fmt.Sprintf("%T", bundleInterface)).Debug("Bundle is not an array")
+		return
+	}
+	
+	if len(bundleArray) < 2 {
+		logrus.WithField("length", len(bundleArray)).Debug("Bundle array too short")
 		return
 	}
 	
@@ -416,16 +408,35 @@ func (r *LocalNodeReader) processSignedActionBundle(bundleInterface interface{},
 		return
 	}
 	
+	logrus.WithField("bundle_data_size", len(bundleDataBytes)).Debug("Marshaled bundle data")
+	
 	var bundle SignedActionBundle
 	if err := json.Unmarshal(bundleDataBytes, &bundle); err != nil {
-		logrus.WithError(err).Debug("Failed to unmarshal signed action bundle")
+		logrus.WithError(err).WithField("bundle_json", string(bundleDataBytes[:min(200, len(bundleDataBytes))])).Debug("Failed to unmarshal signed action bundle")
 		return
 	}
 	
+	logrus.WithFields(logrus.Fields{
+		"signed_actions_count": len(bundle.SignedActions),
+		"broadcaster": bundle.Broadcaster,
+	}).Debug("Successfully parsed signed action bundle")
+	
 	// Process each signed action in the bundle
-	for _, signedAction := range bundle.SignedActions {
+	for i, signedAction := range bundle.SignedActions {
+		logrus.WithFields(logrus.Fields{
+			"action_index": i,
+			"action_type": signedAction.Action.Type,
+		}).Debug("Processing signed action")
 		r.processSignedAction(&signedAction, blockTime)
 	}
+}
+
+// Helper function
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // processSignedAction processes a single signed action
@@ -447,8 +458,24 @@ func (r *LocalNodeReader) processSignedAction(action *SignedAction, blockTime st
 
 // processOrders processes order actions and generates trade-like data
 func (r *LocalNodeReader) processOrders(orders []Order, blockTime string, userAddress string) {
+	if len(orders) == 0 {
+		logrus.Debug("No orders to process")
+		return
+	}
+	
+	logrus.WithField("orders_count", len(orders)).Debug("Processing orders")
+	
+	ordersProcessed := 0
 	for _, order := range orders {
 		symbol := r.getAssetSymbol(order.Asset)
+		
+		// Skip if we couldn't map the asset
+		if strings.HasPrefix(symbol, "ASSET_") {
+			logrus.WithFields(logrus.Fields{
+				"asset_id": order.Asset,
+				"symbol": symbol,
+			}).Debug("Unknown asset ID, using fallback name")
+		}
 		
 		// Convert to WsTrade format for compatibility
 		trade := &types.WsTrade{
@@ -480,17 +507,27 @@ func (r *LocalNodeReader) processOrders(orders []Order, blockTime string, userAd
 		}
 		
 		// Update latest price
+		oldPrice, hadPrice := r.latestPrices[symbol]
 		r.latestPrices[symbol] = order.Price
+		totalPrices := len(r.latestPrices)
 		r.dataMu.Unlock()
 		
 		logrus.WithFields(logrus.Fields{
-			"symbol":  symbol,
-			"side":    trade.Side,
-			"price":   order.Price,
-			"size":    order.Size,
-			"user":    userAddress,
+			"symbol":    symbol,
+			"asset_id":  order.Asset,
+			"side":      trade.Side,
+			"price":     order.Price,
+			"old_price": oldPrice,
+			"had_price": hadPrice,
+			"size":      order.Size,
+			"user":      userAddress,
+			"total_prices": totalPrices,
 		}).Debug("Processed order as trade")
+		
+		ordersProcessed++
 	}
+	
+	logrus.WithField("orders_processed", ordersProcessed).Debug("Completed processing orders")
 }
 
 // processCancellations processes cancellation actions
@@ -523,28 +560,44 @@ func (r *LocalNodeReader) processBlocks() {
 
 // generateWebSocketMessages generates WebSocket messages for various subscription types
 func (r *LocalNodeReader) generateWebSocketMessages(block *HyperliquidNodeBlock) {
-	// Generate allMids message
+	// Generate allMids message if we have price data
 	r.dataMu.RLock()
-	if len(r.latestPrices) > 0 {
-		allMids := types.AllMids{
-			Mids: make(map[string]string),
-		}
-		for symbol, price := range r.latestPrices {
-			allMids.Mids[symbol] = price
-		}
-		
-		message := types.WSMessage{
-			Channel: "allMids",
-		}
-		
-		data, err := json.Marshal(allMids)
-		if err == nil {
-			message.Data = data
-			// This would be sent to the proxy for distribution to clients
-			logrus.WithField("symbols_count", len(allMids.Mids)).Debug("Generated allMids message")
-		}
+	pricesCount := len(r.latestPrices)
+	r.dataMu.RUnlock()
+	
+	if pricesCount > 0 {
+		r.generateAllMidsMessage()
+	} else {
+		logrus.Debug("No prices available yet for allMids generation")
+	}
+}
+
+// generateAllMidsMessage generates and sends allMids message
+func (r *LocalNodeReader) generateAllMidsMessage() {
+	r.dataMu.RLock()
+	if len(r.latestPrices) == 0 {
+		r.dataMu.RUnlock()
+		return
+	}
+	
+	allMids := types.AllMids{
+		Mids: make(map[string]string),
+	}
+	for symbol, price := range r.latestPrices {
+		allMids.Mids[symbol] = price
 	}
 	r.dataMu.RUnlock()
+	
+	_, err := json.Marshal(allMids)
+	if err != nil {
+		logrus.WithError(err).Error("Failed to marshal allMids message")
+		return
+	}
+	
+	logrus.WithField("symbols_count", len(allMids.Mids)).Debug("Generated allMids message")
+	
+	// TODO: This should be sent to the proxy for distribution to clients
+	// For now, we just log that it was generated
 }
 
 // parseBlockTime parses block time to Unix timestamp

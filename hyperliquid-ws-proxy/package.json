@@ -6,10 +6,12 @@
   "scripts": {
     "test": "node test-websocket-proxy.js",
     "test:quick": "node test-websocket-proxy.js --quick",
-    "test:user": "node test-websocket-proxy.js --user"
+    "test:user": "node test-websocket-proxy.js --user",
+    "test:assets": "node test-asset-fetcher.js"
   },
   "dependencies": {
-    "ws": "^8.17.1"
+    "ws": "^8.17.1",
+    "axios": "^1.6.0"
   },
   "keywords": [
     "hyperliquid",

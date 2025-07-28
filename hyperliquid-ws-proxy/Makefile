@@ -162,6 +162,12 @@ test-proxy-remote:
 	@npm list ws >/dev/null 2>&1 || npm install ws
 	node test-websocket-proxy.js
 
+test-assets:
+	@echo "Testing asset fetcher and /assets endpoint..."
+	@command -v node >/dev/null 2>&1 || { echo "❌ Node.js is required for tests"; exit 1; }
+	@npm list axios >/dev/null 2>&1 || npm install axios
+	node test-asset-fetcher.js
+
 test-quick:
 	@echo "Quick health check..."
 	@curl -s http://localhost:8080/health || echo "❌ Service not responding"
@@ -172,6 +178,7 @@ test-full: compose-build compose-up
 	@echo "Waiting for service to start..."
 	@sleep 10
 	@make test-quick
+	@make test-assets
 	@make test-proxy-local
 	@make compose-down
 
@@ -268,6 +275,7 @@ help:
 	@echo ""
 	@echo "Test targets:"
 	@echo "  test-quick        - Quick health check"
+	@echo "  test-assets       - Test asset fetcher and /assets endpoint"
 	@echo "  test-proxy-local  - Test local proxy with node data"
 	@echo "  test-proxy-remote - Test proxy vs official API"
 	@echo "  test-full         - Full test suite (build + deploy + test + cleanup)"

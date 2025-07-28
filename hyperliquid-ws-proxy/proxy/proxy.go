@@ -28,6 +28,7 @@ type Proxy struct {
 	
 	// Local node integration
 	localNodeReader *LocalNodeReader
+	assetFetcher    *AssetFetcher
 	useLocalNode    bool
 }
 
@@ -63,10 +64,13 @@ func NewProxy(cfg *config.Config) *Proxy {
 		},
 	}
 	
+	// Initialize asset fetcher
+	p.assetFetcher = NewAssetFetcher()
+	
 	// Initialize local node reader if enabled
 	if cfg.Proxy.EnableLocalNode {
 		logrus.Info("Local node mode enabled - will read data from local node instead of WebSocket API")
-		p.localNodeReader = NewLocalNodeReader(cfg.Proxy.LocalNodeDataPath)
+		p.localNodeReader = NewLocalNodeReader(cfg.Proxy.LocalNodeDataPath, p.assetFetcher)
 	} else {
 		// Initialize Hyperliquid connector for remote API
 		logrus.Info("Remote API mode - will connect to Hyperliquid WebSocket API")
@@ -85,6 +89,12 @@ func NewProxy(cfg *config.Config) *Proxy {
 // Start starts the proxy
 func (p *Proxy) Start() error {
 	logrus.Info("Starting Hyperliquid WebSocket Proxy")
+	
+	// Start asset fetcher first to ensure metadata is available
+	if err := p.assetFetcher.Start(); err != nil {
+		return fmt.Errorf("failed to start asset fetcher: %v", err)
+	}
+	logrus.Info("Asset fetcher started successfully")
 	
 	// Start the client hub
 	go p.hub.Run()
@@ -132,6 +142,12 @@ func (p *Proxy) Stop() {
 		p.localNodeReader.Stop()
 	}
 	
+	// Stop asset fetcher
+	if p.assetFetcher != nil {
+		p.assetFetcher.Stop()
+		logrus.Info("Asset fetcher stopped")
+	}
+	
 	logrus.Info("Proxy stopped")
 }
 
@@ -176,20 +192,43 @@ func (p *Proxy) generateAllMidsFromLocalNode() {
 	p.subMu.RUnlock()
 	
 	if !hasAllMidsSubscribers {
+		logrus.Debug("No allMids subscribers, skipping generation")
 		return
 	}
 	
-	// Get all latest prices from local node
+	// Get ALL available prices from local node (not just a fixed list)
 	allPrices := make(map[string]string)
-	coins := []string{"BTC", "ETH", "SOL", "MATIC", "ARB", "OP", "AVAX", "ATOM", "NEAR", "APT", "LTC", "BCH", "XRP", "SUI", "SEI"}
 	
-	for _, coin := range coins {
+	// Try to get prices for all known assets
+	knownAssets := []string{
+		"BTC", "ETH", "SOL", "MATIC", "ARB", "OP", "AVAX", "ATOM", "NEAR", "APT", 
+		"LTC", "BCH", "XRP", "SUI", "SEI", "DOGE", "SHIB", "PEPE", "WIF", "BONK",
+		"ADA", "DOT", "LINK", "UNI", "AAVE", "CRV", "MKR", "COMP", "SNX", "YFI",
+		"FTM", "ALGO", "VET", "ONE", "HBAR", "EGLD", "THETA", "TRX", "EOS", "XTZ",
+		"AXS", "SAND", "MANA", "ENJ", "CHZ", "BAT", "GMX", "GNS", "DYDX", "PERP",
+		"IMX", "BLUR", "MAGIC", "APE", "FLOW", "ENS", "AUDIO", "PENDLE", "RDNT",
+	}
+	
+	for _, coin := range knownAssets {
 		if price, exists := p.localNodeReader.GetLatestPrice(coin); exists {
 			allPrices[coin] = price
 		}
 	}
 	
+	// Also try to get any prices that might be stored with ASSET_ prefix
+	if len(allPrices) < 10 { // If we don't have many known assets, try ASSET_ ones
+		for i := 0; i < 300; i++ {
+			assetName := fmt.Sprintf("ASSET_%d", i)
+			if price, exists := p.localNodeReader.GetLatestPrice(assetName); exists {
+				allPrices[assetName] = price
+			}
+		}
+	}
+	
+	logrus.WithField("available_prices", len(allPrices)).Debug("Collected prices for allMids")
+	
 	if len(allPrices) == 0 {
+		logrus.Debug("No prices available from local node")
 		return
 	}
 	
@@ -198,18 +237,19 @@ func (p *Proxy) generateAllMidsFromLocalNode() {
 		Mids: allPrices,
 	}
 	
-	data, err := json.Marshal(allMids)
+	_, err := json.Marshal(allMids)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to marshal allMids from local node")
 		return
 	}
 	
-	message := types.WSMessage{
-		Channel: "allMids",
-		Data:    data,
+	// Create proper message format that matches Hyperliquid's format
+	messageData := map[string]interface{}{
+		"channel": "allMids",
+		"data":    allMids,
 	}
 	
-	messageBytes, err := json.Marshal(message)
+	messageBytes, err := json.Marshal(messageData)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to marshal allMids message")
 		return
@@ -738,4 +778,23 @@ func (p *Proxy) toJSON(obj interface{}) string {
 		return "{}"
 	}
 	return string(data)
+}
+
+// GetAssetStats returns asset statistics from the AssetFetcher
+func (p *Proxy) GetAssetStats() map[string]interface{} {
+	if p.assetFetcher == nil {
+		return map[string]interface{}{
+			"status": "not_available",
+			"reason": "asset fetcher not initialized",
+		}
+	}
+	return p.assetFetcher.GetAssetStats()
+}
+
+// GetAllAssetNames returns all available asset names from the AssetFetcher
+func (p *Proxy) GetAllAssetNames() []string {
+	if p.assetFetcher == nil {
+		return []string{}
+	}
+	return p.assetFetcher.GetAllAssetNames()
 } 

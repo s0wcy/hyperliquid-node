@@ -11,7 +11,7 @@ services:
       - ./config.yaml:/config.yaml:ro
       # Volume pour accéder aux données du node Hyperliquid local
       - /var/lib/docker/volumes/node_hl-data-mainnet/_data:/var/lib/docker/volumes/node_hl-data-mainnet/_data:ro
-    command: ["-config", "/config.yaml", "-log-level", "info"]
+    command: ["-config", "/config.yaml", "-log-level", "debug"]
     environment:
       - TZ=Europe/Paris
     # Utiliser l'utilisateur root pour accéder aux volumes Docker du node

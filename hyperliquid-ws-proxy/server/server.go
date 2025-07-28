@@ -43,6 +43,9 @@ func (s *Server) Start() error {
 	// Proxy info endpoint
 	mux.HandleFunc("/info", s.handleInfo)
 	
+	// Assets endpoint
+	mux.HandleFunc("/assets", s.handleAssets)
+	
 	// CORS middleware for web clients
 	handler := s.corsMiddleware(mux)
 	
@@ -138,6 +141,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 			"health":      "/health",
 			"stats":       "/stats",
 			"info":        "/info",
+			"assets":      "/assets",
 		},
 		"supported_subscriptions": []string{
 			"allMids", "l2Book", "trades", "candle", "bbo",
@@ -163,6 +167,26 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	
 	json.NewEncoder(w).Encode(info)
+}
+
+// handleAssets handles asset listing requests
+func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	
+	// Get asset statistics and all asset names
+	stats := s.proxy.GetAssetStats()
+	allAssets := s.proxy.GetAllAssetNames()
+	
+	response := map[string]interface{}{
+		"status": "success",
+		"data": map[string]interface{}{
+			"statistics": stats,
+			"assets":     allAssets,
+		},
+		"timestamp": time.Now().Unix(),
+	}
+	
+	json.NewEncoder(w).Encode(response)
 }
 
 // corsMiddleware adds CORS headers
