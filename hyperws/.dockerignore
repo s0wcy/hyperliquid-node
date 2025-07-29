@@ -1,0 +1,33 @@
+# Fichiers de développement
+*.md
+.git
+.gitignore
+*.log
+
+# Fichiers temporaires
+tmp/
+.tmp/
+
+# Binaires locaux
+hyperws
+*.exe
+*.so
+*.dylib
+
+# Tests
+*_test.go
+test/
+
+# Documentation
+docs/
+examples/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db 
