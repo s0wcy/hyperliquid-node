@@ -1,0 +1,2 @@
+# Prune agressif toutes les 4 heures pour VPS avec espace limité
+0 */4 * * * /bin/bash -c '/home/hluser/scripts/prune-aggressive.sh > /proc/1/fd/1 2>&1' 
