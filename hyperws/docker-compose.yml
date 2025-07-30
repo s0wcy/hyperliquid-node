@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  hyperws:
+    build: .
+    container_name: hyperws
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Monter les données du nœud Hyperliquid (ajustez le chemin selon votre configuration)
+      - /var/lib/docker/volumes/node_hl-data-mainnet/_data:/data:ro
+      # Optionnel: monter un fichier de configuration personnalisé
+      # - ./config.yaml:/app/config.yaml:ro
+    environment:
+      - LOG_LEVEL=info
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - hyperws-network
+
+networks:
+  hyperws-network:
+    driver: bridge
+
+# Configuration pour testnet (commentée par défaut)
+# Pour utiliser testnet, décommentez et modifiez le volume :
+# volumes:
+#   - /var/lib/docker/volumes/node_hl-data-testnet/_data:/data:ro 

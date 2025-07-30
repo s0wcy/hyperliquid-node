@@ -1,0 +1,24 @@
+# HyperWS - Configuration simple
+# Proxy WebSocket optimisé pour Hyperliquid
+
+# Serveur WebSocket
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+# Source de données - Nœud non-validateur Hyperliquid
+node:
+  data_path: "/data"  # Chemin dans le container Docker
+  # En local (sans Docker), utilisez le chemin complet :
+  # data_path: "/var/lib/docker/volumes/node_hl-data-mainnet/_data"
+
+# Configuration du proxy
+proxy:
+  max_clients: 1000
+  heartbeat_interval: 30
+  message_buffer_size: 1024
+
+# Logs
+logging:
+  level: "info"  # debug, info, warn, error
+  format: "text"  # text, json 
